@@ -1,0 +1,551 @@
+/* ============================================================
+   SAP DS Payload Viewer — overlay.css
+   Styles for the injected "View Payload" button and the
+   VS Code-inspired file viewer overlay.
+   ============================================================ */
+
+/* ── "View Data" button — shared style for both Data Stores and JMS toolbars ──
+   Matches SAP Fiori's transparent link-style action buttons (Move/Retry/Delete). */
+.sap-ds-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.75rem;
+  margin-right: 0.5rem;
+  height: 2rem;
+  background: transparent;
+  color: #0064d9;         /* SAP Fiori action blue */
+  border: none;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;    /* 14px */
+  font-family: "72", "72full", Arial, Helvetica, sans-serif;
+  font-weight: normal;
+  cursor: pointer;
+  white-space: nowrap;
+  vertical-align: middle;
+  outline: none;
+  text-decoration: none;
+  line-height: 2rem;
+}
+
+.sap-ds-btn:hover:not(:disabled) {
+  color: #0a3b76;
+  background: rgba(0, 100, 217, 0.08);
+}
+
+.sap-ds-btn:focus-visible {
+  outline: 2px solid #0064d9;
+  outline-offset: 2px;
+}
+
+.sap-ds-btn:disabled {
+  color: #89919a;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+/* ============================================================
+   Overlay container + backdrop
+   ============================================================ */
+#sap-ds-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647; /* max z-index */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Courier New", monospace;
+}
+
+#ds-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+/* ============================================================
+   Main panel
+   ============================================================ */
+#ds-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 86vw;
+  height: 82vh;
+  max-width: 1400px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 8px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  z-index: 1;
+}
+
+/* ── Header bar ── */
+#ds-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  background: #323233;
+  border-bottom: 1px solid #404040;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+#ds-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+#ds-store-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e8e8e8;
+  font-family: "72", Arial, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── ID rows (entry id + message id) ── */
+.ds-id-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+#ds-entry-id,
+#ds-msg-id {
+  font-size: 11px;
+  color: #9cdcfe;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#ds-msg-id {
+  color: #ce9178; /* warm orange — distinguishes it from the entry id */
+}
+
+/* Small inline copy button next to IDs */
+.ds-mini-copy {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid #555;
+  color: #888;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: "72", Arial, sans-serif;
+  line-height: 1.4;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+.ds-mini-copy:hover {
+  background: #404040;
+  color: #fff;
+  border-color: #777;
+}
+.ds-mini-copy.ds-copied {
+  color: #4ec94e;
+  border-color: #4ec94e;
+}
+
+#ds-close-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
+}
+#ds-close-btn:hover {
+  background: #505050;
+  color: #ffffff;
+}
+
+/* ── Body: sidebar + content ── */
+#ds-body {
+  display: flex;
+  flex: 1;
+  min-height: 0; /* required for flex children to scroll */
+}
+
+/* ── File sidebar ── */
+#ds-sidebar {
+  width: 230px;
+  min-width: 160px;
+  max-width: 320px;
+  flex-shrink: 0;
+  background: #252526;
+  border-right: 1px solid #3c3c3c;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+#ds-sidebar-title {
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #bbb;
+  font-family: "72", Arial, sans-serif;
+  border-bottom: 1px solid #3c3c3c;
+  flex-shrink: 0;
+}
+
+.ds-file-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  color: #cccccc;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.ds-file-item:hover {
+  background: #2a2d2e;
+}
+
+.ds-file-item.ds-active {
+  background: #37373d;
+  border-left-color: #0078d4;
+  color: #ffffff;
+}
+
+.ds-file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.ds-file-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;   /* pushes the size badge to the right */
+}
+
+.ds-file-size {
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-size: 10px;
+  color: #606060;
+  font-family: "72", Arial, sans-serif;
+  white-space: nowrap;
+}
+
+/* ── Content area ── */
+#ds-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#ds-content-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3c3c3c;
+  flex-shrink: 0;
+  gap: 8px;
+  min-height: 36px;
+}
+
+#ds-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+#ds-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+#ds-content-filename {
+  font-size: 12px;
+  color: #9cdcfe;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Type badge: JSON / XML / TEXT / BINARY */
+.ds-type-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: "72", Arial, sans-serif;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.ds-type-json   { background: #264f78; color: #9cdcfe; }
+.ds-type-xml    { background: #3d2b00; color: #ffd580; }
+.ds-type-text   { background: #2d3a2d; color: #89d185; }
+.ds-type-binary { background: #3a2d2d; color: #f48771; }
+
+/* Shared tool button style */
+.ds-tool-btn {
+  background: none;
+  border: 1px solid #555;
+  color: #ccc;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "72", Arial, sans-serif;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.ds-tool-btn:hover {
+  background: #404040;
+  color: #ffffff;
+  border-color: #777;
+}
+/* Active/on state — e.g. Wrap engaged, Format flash */
+.ds-tool-btn.ds-btn-on {
+  background: #0064d9;
+  border-color: #0064d9;
+  color: #ffffff;
+}
+
+/* ── Search bar ── */
+#ds-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3c3c3c;
+  flex-shrink: 0;
+}
+
+#ds-search-input {
+  flex: 1;
+  max-width: 300px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  color: #d4d4d4;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 12px;
+  outline: none;
+  caret-color: #d4d4d4;
+}
+#ds-search-input:focus       { border-color: #0064d9; background: #444; }
+#ds-search-input.ds-no-match { border-color: #c53030; color: #f47070; }
+
+#ds-search-count {
+  font-size: 11px;
+  color: #888;
+  min-width: 72px;
+  font-family: "72", Arial, sans-serif;
+  white-space: nowrap;
+}
+
+/* Search highlight marks */
+mark.hl-search {
+  background: rgba(249, 199, 79, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  outline: 1px solid rgba(249, 199, 79, 0.6);
+}
+mark.hl-current {
+  background: #f9c74f;
+  color: #1e1e1e;
+  border-radius: 2px;
+  outline: 1px solid #f9a000;
+}
+
+/* ── Code wrapper: line-nums + pre scroll together ── */
+#ds-code-wrap {
+  flex: 1;
+  display: flex;
+  overflow: auto;
+  min-height: 0;
+  background: #1e1e1e;
+}
+
+/* ── Line number gutter ── */
+#ds-line-nums {
+  flex-shrink: 0;
+  padding: 16px 10px 16px 16px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #555;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid #333;
+  background: #1e1e1e;
+  /* Stick to left edge when scrolling horizontally */
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+#ds-line-nums span { display: block; }
+
+/* ── Code view ── */
+#ds-code {
+  flex: 1;
+  min-width: 0;               /* allow flex item to shrink so pre-wrap can kick in */
+  margin: 0;
+  padding: 16px 20px;
+  overflow: visible;          /* #ds-code-wrap handles scrolling */
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #d4d4d4;
+  background: transparent;
+  white-space: pre;
+  word-wrap: normal;
+  tab-size: 2;
+}
+
+/* ============================================================
+   Size variants  (applied as classes on #ds-panel)
+   Default (no class) = Medium = current 86vw × 82vh
+   ============================================================ */
+#ds-panel.ds-size-s { width: 72vw;  height: 72vh; max-width: 1100px; }
+#ds-panel.ds-size-l { width: 95vw;  height: 92vh; max-width: none;   }
+
+/* ============================================================
+   Font size variants  (applied as classes on #ds-panel)
+   Default (no class) = Medium = 12.5 px
+   ============================================================ */
+#ds-panel.ds-font-s #ds-code,
+#ds-panel.ds-font-s #ds-line-nums { font-size: 11px; }
+
+#ds-panel.ds-font-l #ds-code,
+#ds-panel.ds-font-l #ds-line-nums { font-size: 14.5px; }
+
+/* ============================================================
+   Light theme  (.ds-theme-light on #ds-panel)
+   VS Code Light+ inspired palette
+   ============================================================ */
+.ds-theme-light                          { background: #ffffff; color: #1e1e1e; }
+.ds-theme-light #ds-header               { background: #f3f3f3; border-bottom-color: #d8d8d8; }
+.ds-theme-light #ds-store-name           { color: #1e1e1e; }
+.ds-theme-light #ds-entry-id             { color: #0451a5; }
+.ds-theme-light #ds-msg-id               { color: #a31515; }
+.ds-theme-light .ds-mini-copy            { border-color: #c0c0c0; color: #666; }
+.ds-theme-light .ds-mini-copy:hover      { background: #e8e8e8; color: #1e1e1e; border-color: #999; }
+.ds-theme-light .ds-mini-copy.ds-copied  { color: #107c10; border-color: #107c10; }
+.ds-theme-light #ds-close-btn            { color: #666; }
+.ds-theme-light #ds-close-btn:hover      { background: #e0e0e0; color: #1e1e1e; }
+
+.ds-theme-light #ds-sidebar              { background: #f7f7f7; border-right-color: #d8d8d8; }
+.ds-theme-light #ds-sidebar-title        { color: #888; border-bottom-color: #d8d8d8; }
+.ds-theme-light .ds-file-item            { color: #333; border-left-color: transparent; }
+.ds-theme-light .ds-file-item:hover      { background: #ebebeb; }
+.ds-theme-light .ds-file-item.ds-active  { background: #ddeeff; border-left-color: #0064d9; color: #1e1e1e; }
+.ds-theme-light .ds-file-size            { color: #aaa; }
+
+.ds-theme-light #ds-content-toolbar      { background: #f3f3f3; border-bottom-color: #d8d8d8; }
+.ds-theme-light #ds-content-filename     { color: #0451a5; }
+.ds-theme-light .ds-type-json            { background: #ddeeff; color: #0451a5; }
+.ds-theme-light .ds-type-xml             { background: #fff3d0; color: #7d5a00; }
+.ds-theme-light .ds-type-text            { background: #e8f5e8; color: #1a6b1a; }
+.ds-theme-light .ds-type-binary          { background: #fde8e8; color: #c01010; }
+.ds-theme-light .ds-tool-btn             { border-color: #c0c0c0; color: #333; background: #fff; }
+.ds-theme-light .ds-tool-btn:hover       { background: #e8e8e8; color: #1e1e1e; border-color: #999; }
+.ds-theme-light .ds-tool-btn.ds-btn-on   { background: #0064d9; border-color: #0064d9; color: #fff; }
+
+.ds-theme-light #ds-search-bar           { background: #f3f3f3; border-bottom-color: #d8d8d8; }
+.ds-theme-light #ds-search-input         { background: #fff; border-color: #c0c0c0; color: #1e1e1e; caret-color: #1e1e1e; }
+.ds-theme-light #ds-search-input:focus   { border-color: #0064d9; }
+.ds-theme-light #ds-search-input.ds-no-match { border-color: #c00; color: #c00; }
+.ds-theme-light #ds-search-count         { color: #888; }
+
+.ds-theme-light #ds-code-wrap            { background: #ffffff; }
+.ds-theme-light #ds-line-nums            { background: #f7f7f7; border-right-color: #d8d8d8; color: #b0b0b0; }
+.ds-theme-light #ds-code                 { color: #1e1e1e; background: transparent; }
+
+/* Light theme scrollbars */
+.ds-theme-light #ds-sidebar::-webkit-scrollbar-thumb,
+.ds-theme-light #ds-code-wrap::-webkit-scrollbar-thumb { background: #c0c0c0; }
+.ds-theme-light #ds-sidebar::-webkit-scrollbar-thumb:hover,
+.ds-theme-light #ds-code-wrap::-webkit-scrollbar-thumb:hover { background: #999; }
+
+/* Light theme syntax highlighting (VS Code Light+ palette) */
+.ds-theme-light .hl-key       { color: #0451a5; }
+.ds-theme-light .hl-string    { color: #a31515; }
+.ds-theme-light .hl-number    { color: #098658; }
+.ds-theme-light .hl-bool      { color: #0000ff; }
+.ds-theme-light .hl-null      { color: #0000ff; }
+.ds-theme-light .hl-brace     { color: #1e1e1e; }
+.ds-theme-light .hl-punct     { color: #1e1e1e; }
+.ds-theme-light .hl-tag-name  { color: #800000; }
+.ds-theme-light .hl-attr-name { color: #e50000; }
+.ds-theme-light .hl-attr-val  { color: #0000ff; }
+.ds-theme-light .hl-xml-text  { color: #1e1e1e; }
+.ds-theme-light .hl-comment   { color: #008000; }
+.ds-theme-light .hl-cdata     { color: #a31515; }
+
+/* ── Syntax highlighting (Format mode) ── */
+.hl-key       { color: #9cdcfe; }   /* JSON key            — light blue   */
+.hl-string    { color: #ce9178; }   /* JSON string value   — warm orange  */
+.hl-number    { color: #b5cea8; }   /* JSON number         — sage green   */
+.hl-bool      { color: #569cd6; }   /* JSON true / false   — keyword blue */
+.hl-null      { color: #569cd6; }   /* JSON null           — keyword blue */
+.hl-brace     { color: #ffd700; }   /* JSON { } [ ]        — gold         */
+.hl-punct     { color: #d4d4d4; }   /* JSON : ,  / XML <>  — default grey */
+.hl-tag-name  { color: #4ec9b0; }   /* XML element name    — teal         */
+.hl-attr-name { color: #9cdcfe; }   /* XML attribute name  — light blue   */
+.hl-attr-val  { color: #ce9178; }   /* XML attribute value — warm orange  */
+.hl-xml-text  { color: #d4d4d4; }   /* XML text content    — default grey */
+.hl-comment   { color: #6a9955; font-style: italic; }  /* comment — green */
+.hl-cdata     { color: #ce9178; }   /* CDATA section       — warm orange  */
+
+/* ── Scrollbar styling (Webkit) ── */
+#ds-sidebar::-webkit-scrollbar,
+#ds-code-wrap::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+#ds-sidebar::-webkit-scrollbar-track,
+#ds-code-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+#ds-sidebar::-webkit-scrollbar-thumb,
+#ds-code-wrap::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 3px;
+}
+#ds-sidebar::-webkit-scrollbar-thumb:hover,
+#ds-code-wrap::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}

@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Chrome Web Store submission zip
+*.zip
+
+# Editor
+.vscode/
+*.code-workspace
+
+# Logs / temp
+*.log

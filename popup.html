@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SAP CPI Workmate</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 340px;
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      color: #2c2c2c;
+      background: #f5f5f5;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #0064d9 0%, #004aaa 100%);
+      color: #fff;
+      padding: 16px 18px 14px;
+    }
+    .header-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .header-subtitle {
+      margin-top: 3px;
+      font-size: 11px;
+      opacity: 0.82;
+    }
+    .header-version {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 10px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.18);
+      border-radius: 10px;
+      padding: 2px 8px;
+      letter-spacing: 0.04em;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+    }
+    .tab {
+      flex: 1;
+      padding: 9px 4px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 500;
+      color: #666;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .tab:hover { color: #0064d9; }
+    .tab.active {
+      color: #0064d9;
+      border-bottom-color: #0064d9;
+      font-weight: 600;
+    }
+
+    /* ── Tab content ── */
+    .tab-content { display: none; padding: 16px 18px; }
+    .tab-content.active { display: block; }
+
+    /* ── How to use ── */
+    .step {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 11px;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #0064d9;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-text { line-height: 1.5; color: #333; }
+    .step-text strong { color: #0064d9; }
+
+    /* ── About ── */
+    .about-desc {
+      line-height: 1.65;
+      color: #333;
+      margin-bottom: 14px;
+    }
+    .about-desc p + p { margin-top: 8px; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #e0e0e0;
+      margin: 14px 0;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: #444;
+    }
+    .info-row .label {
+      font-weight: 600;
+      color: #222;
+      min-width: 64px;
+    }
+    .info-row a {
+      color: #0064d9;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .info-row a:hover { text-decoration: underline; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #e8f0fb;
+      color: #0064d9;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 12px;
+    }
+
+    .license-box {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 11.5px;
+      color: #555;
+      line-height: 1.6;
+    }
+    .license-box a {
+      color: #0064d9;
+      text-decoration: none;
+    }
+    .license-box a:hover { text-decoration: underline; }
+    .license-note {
+      margin-top: 8px;
+      font-size: 10.5px;
+      color: #888;
+      font-style: italic;
+    }
+
+    /* ── Settings tab ── */
+    .setting-section { margin-bottom: 18px; }
+    .setting-section:last-child { margin-bottom: 0; }
+    .setting-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #444;
+      margin-bottom: 7px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .setting-hint {
+      margin-top: 5px;
+      font-size: 10.5px;
+      color: #999;
+      line-height: 1.45;
+    }
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .toggle-label { font-size: 12px; color: #444; }
+    .toggle-switch {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: #ccc;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-track::before {
+      content: '';
+      position: absolute;
+      width: 14px; height: 14px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-track { background: #0064d9; }
+    .toggle-switch input:checked + .toggle-track::before { transform: translateX(16px); }
+
+    /* Segmented control */
+    .seg-ctrl {
+      display: flex;
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .seg-btn {
+      flex: 1;
+      padding: 7px 4px;
+      background: #fff;
+      border: none;
+      border-right: 1px solid #d0d0d0;
+      font-size: 12px;
+      color: #555;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+      font-family: "Segoe UI", Arial, sans-serif;
+      text-align: center;
+    }
+    .seg-btn:last-child { border-right: none; }
+    .seg-btn:hover:not(.seg-active) { background: #f0f4ff; color: #0064d9; }
+    .seg-btn.seg-active { background: #0064d9; color: #fff; font-weight: 600; }
+
+    .footer {
+      padding: 8px 18px;
+      font-size: 10px;
+      color: #aaa;
+      text-align: center;
+      border-top: 1px solid #e8e8e8;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-title">SAP CPI Workmate</div>
+    <div class="header-subtitle">SAP Integration Suite · Your Integration Companion</div>
+    <span class="header-version">v 1.0.1</span>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active"        data-tab="settings">Settings</div>
+    <div class="tab"        data-tab="about">About</div>
+    <div class="tab" data-tab="how">How to Use</div>
+    <div class="tab"        data-tab="license">License</div>
+  </div>
+
+  <!-- How to Use -->
+  <div class="tab-content" id="tab-how">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text">Navigate to <strong>Monitor → Data Stores</strong> or <strong>Message Queues</strong> in SAP Integration Suite.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-text">Click a data store on the left panel to open its entries.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-text">Click any row in the <strong>Entries</strong> table to select it.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-text">Click the <strong>View Data</strong> button (next to Filter by ID). The payload will be fetched using your active session.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-text">Select any file in the left sidebar to inspect its contents. Use <strong>Format</strong>, <strong>Wrap</strong>, <strong>Copy</strong>, or <strong>Download</strong> as needed.</div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="tab-content active" id="tab-settings">
+
+    <div class="setting-section">
+      <div class="setting-title">Overlay Size</div>
+      <div class="seg-ctrl" id="size-ctrl">
+        <button class="seg-btn" data-size="s">Small</button>
+        <button class="seg-btn" data-size="m">Medium</button>
+        <button class="seg-btn" data-size="l">Large</button>
+      </div>
+      <div class="setting-hint">Small — 72 % &nbsp;·&nbsp; Medium — 86 % (default) &nbsp;·&nbsp; Large — 95 %</div>
+    </div>
+
+    <div class="setting-section">
+      <div class="setting-title">Theme</div>
+      <div class="seg-ctrl" id="theme-ctrl">
+        <button class="seg-btn" data-theme="dark">🌙 Dark</button>
+        <button class="seg-btn" data-theme="light">☀️ Light</button>
+      </div>
+    </div>
+
+    <div class="setting-section">
+      <div class="setting-title">Auto Format</div>
+      <div class="toggle-row">
+        <span class="toggle-label">Automatically format JSON / XML on load</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="auto-format-toggle" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div class="setting-hint">When ON, payloads are pretty-printed automatically.</div>
+    </div>
+
+    <div class="setting-section">
+      <div class="setting-title">Code Font Size</div>
+      <div class="seg-ctrl" id="font-ctrl">
+        <button class="seg-btn" data-font="s">Small</button>
+        <button class="seg-btn" data-font="m">Medium</button>
+        <button class="seg-btn" data-font="l">Large</button>
+      </div>
+      <div class="setting-hint">Small — 11 px &nbsp;·&nbsp; Medium — 12.5 px (default) &nbsp;·&nbsp; Large — 14.5 px</div>
+    </div>
+
+  </div>
+
+  <!-- About -->
+  <div class="tab-content" id="tab-about">
+    <div class="about-desc">
+      <p>
+        <strong>SAP CPI Workmate</strong> is your browser companion for SAP Integration
+        Suite (Cloud Platform Integration). It adds a <em>View Data</em> button to both
+        the <strong>Data Stores</strong> and <strong>JMS Queues</strong> monitoring pages —
+        letting you inspect message payloads directly in the browser with zero extra setup.
+      </p>
+      <p>
+        Uses your existing browser session (no extra login), calls the SAP monitoring APIs, and unpacks returned zip files
+        in-browser using JSZip. Supports syntax highlighting, line numbers, full-text
+        search, and configurable size, theme, and font settings.
+      </p> 
+    </div>
+
+    <hr class="divider" />
+
+    <div class="info-row">
+      <span class="label">Extension</span>
+      <span>SAP CPI Workmate</span>
+    </div>
+    <div class="info-row">
+      <span class="label">Author</span>
+      <span>Santhosh Kumar Vellingiri</span>
+    </div>
+    <div class="info-row">
+      <span class="label">LinkedIn</span>
+      <a href="https://www.linkedin.com/in/santhoshkumarvellingiri/" target="_blank">
+        linkedin.com/in/santhoshkumarvellingiri
+      </a>
+    </div>
+    <div class="info-row">
+      <span class="label">Version</span>
+      <span class="badge">🔖 1.0.1</span>
+    </div>
+    <div class="info-row">
+      <span class="label">Platform</span>
+      <span>SAP Integration Suite · BTP</span>
+    </div>
+    <div class="info-row">
+      <span class="label">Features</span>
+      <span>Data Stores · JMS Queues</span>
+    </div>
+  </div>
+
+  <!-- License -->
+  <div class="tab-content" id="tab-license">
+    <div class="license-box">
+      <strong>MIT License</strong><br /><br />
+      Copyright © 2025–2026 Santhosh Kumar Vellingiri<br /><br />
+      Permission is hereby granted, free of charge, to any person obtaining a copy
+      of this software to use, copy, modify, merge, publish, distribute, sublicense,
+      and/or sell copies of the Software, subject to the following conditions:<br /><br />
+      The above copyright notice and this permission notice shall be included in all
+      copies or substantial portions of the Software.
+    </div>
+  </div>
+
+  <div class="footer">SAP CPI Workmate &nbsp;·&nbsp; By Santhosh Kumar Vellingiri</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

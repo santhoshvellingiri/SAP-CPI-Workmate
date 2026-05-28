@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "SAP CPI Workmate",
+  "version": "1.0.1",
+  "description": "Inspect SAP Integration Suite Data Store and JMS Queue payloads in your browser. No downloading, unzipping or opening in an editor.",
+
+  "permissions": ["storage"],
+  "host_permissions": [
+    "*://*.hana.ondemand.com/*"
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SAP CPI Workmate",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.hana.ondemand.com/shell/monitoring/DataStores*",
+        "*://*.hana.ondemand.com/shell/monitoring/dataStores*",
+        "*://*.hana.ondemand.com/itspaces/shell/monitoring/DataStores*",
+        "*://*.hana.ondemand.com/itspaces/shell/monitoring/dataStores*",
+        "*://*.hana.ondemand.com/shell/monitoring/MessageQueues*",
+        "*://*.hana.ondemand.com/shell/monitoring/messageQueues*",
+        "*://*.hana.ondemand.com/itspaces/shell/monitoring/MessageQueues*",
+        "*://*.hana.ondemand.com/itspaces/shell/monitoring/messageQueues*"
+      ],
+      "js": ["jszip.min.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
