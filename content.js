@@ -1322,7 +1322,9 @@
     const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
-      if (/^ID:\d/.test(node.textContent?.trim() || '')) return false; // message row
+      const t = node.textContent?.trim() || '';
+      // SAP uses "ID:\d..." format (older tenants) and "x-hex-..." (newer tenants)
+      if (/^ID:\d/.test(t) || /^x-hex-/i.test(t)) return false; // message row
     }
     return !!row.querySelector('[class*="sapMObjectIdentifier"]');
   }
@@ -1360,7 +1362,9 @@
    *   • Responsive list layout — ID text sits inside a <span> or <bdi>
    */
   function extractJmsMsgId(row) {
-    const JMS_ID_RE = /^ID:\d+\.\d+/;
+    // Older tenants use "ID:10.157.178.78:..." format
+    // Newer tenants use "x-hex-000000000000001a" format (SAP updated ~2026)
+    const JMS_ID_RE = /^ID:\d+\.\d+|^x-hex-[0-9a-f]+/i;
     const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
