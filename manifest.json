@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SAP CPI Workmate",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Inspect SAP Integration Suite Data Store and JMS Queue payloads in your browser. No downloading, unzipping or opening in an editor.",
 
   "permissions": ["storage"],
