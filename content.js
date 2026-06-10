@@ -28,6 +28,13 @@
   const JMS_BTN_ID   = 'sap-jms-view-btn';
   const JMS_API_PATH = '/odata/api/v1/JmsMessages';
 
+  // ── Message Processing Logs ──────────────────────────────────────────────
+  const MSG_BTN_ID           = 'sap-msg-corr-btn';
+  const MSG_LOG_OVERLAY_ID   = 'sap-msg-log-overlay';
+  const MSG_LOG_API_PATH     = '/odata/api/v1/MessageProcessingLogs';
+  const ATTACH_OPEN_BTN_CLASS = 'cpi-attach-open-btn';
+  const ATTACH_API_PATH       = '/odata/api/v1/MessageProcessingLogAttachments';
+
   /* ─────────────────────────────────────────────────────────────────────────
    * State
    * ───────────────────────────────────────────────────────────────────────── */
@@ -36,8 +43,8 @@
   /** @type {{ id: string, storeName: string, qualifier: string, messageId: string | null } | null} */
   let selectedEntry = null;
 
-  /** WeakSet so we never double-attach click listeners to a table element */
-  const tablesWatched = new WeakSet();
+  /** True once we've attached the document-level row-click delegate for datastores */
+  let dsRowListenerAttached = false;
 
   /**
    * Dedicated observer on the entries toolbar.
@@ -52,12 +59,31 @@
   // ── JMS Message Queues state ─────────────────────────────────────────────
   /** @type {{ msgId: string, name: string, failed: boolean } | null} */
   let jmsSelectedEntry = null;
+  /** True once we've attached the document-level row-click delegate for JMS */
+  let jmsRowListenerAttached = false;
+
+  // ── Correlated Messages retry + properties observer ──────────────────────
+  /** Timer handle for the next retry attempt */
+  let corrIdRetryTimer = null;
+  /** How many retries have been attempted in the current navigation cycle */
+  let corrIdRetryCount = 0;
+  /** Max retries — covers up to ~5 s of SAPUI5 async rendering after a cold page load */
+  const CORR_ID_MAX_RETRIES = 5;
+  /**
+   * Dedicated observer on the SAP Properties sub-section (#mpl_properties_id).
+   * SAPUI5 re-renders this section after navigation, wiping our injected button.
+   * This observer re-injects instantly whenever the button disappears.
+   */
+  let msgPropertiesObserver = null;
+  /** The DOM element currently being observed, so we can detect if SAP recreates it */
+  let msgPropertiesObservedEl = null;
+  /** True while the breadcrumb click listener is attached on the MessageDetails page */
+  let breadcrumbListenerAttached = false;
 
   /** Most-recently clicked queue name from the left panel */
   let jmsQueueName = null;
 
-  const jmsTablesWatched  = new WeakSet();
-  let   jmsToolbarObserver = null;
+  let jmsToolbarObserver = null;
 
   /* ─────────────────────────────────────────────────────────────────────────
    * User settings  (size + theme, persisted via chrome.storage.local)
@@ -87,6 +113,42 @@
   domObserver.observe(document.body, { childList: true, subtree: true });
   onDomChanged(); // also run once immediately
 
+  // SAPUI5 SPA navigation changes the hash/history without causing new DOM
+  // mutations visible to the observer, so also listen for URL changes.
+  const onNavChange = debounce(() => {
+    corrIdRetryCount = 0; // reset retry counter on every navigation
+    onDomChanged();
+    // Give SAPUI5 extra time to finish its async render after navigation
+    clearTimeout(corrIdRetryTimer);
+    corrIdRetryTimer = setTimeout(onDomChanged, 800);
+  }, 200);
+  window.addEventListener('hashchange', onNavChange);
+  window.addEventListener('popstate',   onNavChange);
+
+  // SAPUI5 breadcrumb navigation calls history.pushState directly — neither
+  // hashchange nor popstate fire. Patch pushState to catch these transitions.
+  const _origPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    _origPushState(...args);
+    onNavChange();
+  };
+
+  // Polling safety net — SAPUI5 fully destroys and recreates the Messages DOM
+  // when navigating to MessageDetails, so observer/retry timing is unreliable.
+  // This lightweight poll (2 getElementById calls per tick) guarantees the button
+  // is re-injected as soon as the corrLink reappears, regardless of how SAPUI5
+  // renders the page on return navigation.
+  setInterval(() => {
+    const url = location.href.toLowerCase();
+    if (url.includes('/monitoring/messages') && !url.includes('messagequeues')) {
+      if (!document.getElementById(MSG_BTN_ID) &&
+          (document.getElementById('MESSAGES_INFO_CORRELATION_ID') ||
+           document.querySelector('a[id*="CORRELATION_ID"][class*="sapMLnk"]'))) {
+        injectCorrIdButton();
+      }
+    }
+  }, 500);
+
   function onDomChanged() {
     const url = location.href.toLowerCase();
     if (url.includes('datastores')) {
@@ -97,6 +159,102 @@
       injectJmsViewButton();
       attachJmsTableListeners();
     }
+    // Messages monitoring page — inject Correlated Messages button next to Correlation ID
+    if (url.includes('/monitoring/messages') && !url.includes('messagequeues')) {
+      // If we just returned from MessageDetails (flagged via sessionStorage), run
+      // an aggressive retry loop to cover slow SAPUI5 re-renders after full reload.
+      const returnFlag = sessionStorage.getItem('cpi-workmate-return-from-details');
+      if (returnFlag) {
+        sessionStorage.removeItem('cpi-workmate-return-from-details');
+        startReturnInjection();
+      }
+      injectCorrIdButton();
+      startMsgPropertiesObserver();
+      injectAttachmentOpenButtons();
+    } else {
+      stopMsgPropertiesObserver();
+    }
+
+    // MessageDetails page — listen for the "Monitor Message Processing" breadcrumb
+    // so we know when the user is about to return to the Messages page.
+    if (url.includes('/monitoring/messagedetails')) {
+      attachMessageDetailsBreadcrumbListener();
+    }
+  }
+
+  /**
+   * On the MessageDetails page, adds a one-time delegated click listener that
+   * sets a sessionStorage flag when "Monitor Message Processing" breadcrumb is clicked.
+   * The flag survives the full page reload and tells the Messages page to inject aggressively.
+   */
+  function attachMessageDetailsBreadcrumbListener() {
+    if (breadcrumbListenerAttached) return;
+    breadcrumbListenerAttached = true;
+    document.body.addEventListener('click', function onBreadcrumbClick(e) {
+      const target = e.target.closest('button, a, [role="link"], [role="button"]');
+      if (target && target.textContent?.trim().includes('Monitor Message Processing')) {
+        sessionStorage.setItem('cpi-workmate-return-from-details', '1');
+        document.body.removeEventListener('click', onBreadcrumbClick);
+        breadcrumbListenerAttached = false;
+      }
+    }, true /* capture phase — fires before SAPUI5 can swallow it */);
+  }
+
+  /**
+   * Aggressive injection loop used after returning from MessageDetails.
+   * SAPUI5 re-renders the Properties section several times after a full page reload,
+   * so we poll every 300 ms for up to 15 s to guarantee the button appears.
+   */
+  function startReturnInjection() {
+    let attempts = 0;
+    const max = 50; // 50 × 300 ms = 15 s
+    const t = setInterval(() => {
+      attempts++;
+      const corrLink = document.getElementById('MESSAGES_INFO_CORRELATION_ID') ||
+        document.querySelector('a[id*="CORRELATION_ID"][class*="sapMLnk"]');
+      if (corrLink && !document.getElementById(MSG_BTN_ID)) {
+        injectCorrIdButton();
+      }
+      if (attempts >= max || (corrLink && document.getElementById(MSG_BTN_ID))) {
+        clearInterval(t);
+      }
+    }, 300);
+  }
+
+  /**
+   * Sets up a MutationObserver on SAP's stable #mpl_properties_id element.
+   * SAPUI5 re-renders the Properties section after navigation, wiping our button.
+   * This observer re-injects instantly whenever the section mutates and the button is gone.
+   */
+  function startMsgPropertiesObserver() {
+    const propertiesEl = document.getElementById('mpl_properties_id');
+    if (!propertiesEl) return;
+
+    // Already observing this exact element — nothing to do
+    if (msgPropertiesObserver && msgPropertiesObservedEl === propertiesEl) return;
+
+    // Element changed (SAP recreated it) or first time — reconnect
+    if (msgPropertiesObserver) msgPropertiesObserver.disconnect();
+
+    msgPropertiesObservedEl = propertiesEl;
+    msgPropertiesObserver = new MutationObserver(() => {
+      // Re-inject immediately if our button disappeared but the corrLink is still there
+      if (!document.getElementById(MSG_BTN_ID) &&
+          (document.getElementById('MESSAGES_INFO_CORRELATION_ID') ||
+           document.querySelector('a[id*="CORRELATION_ID"][class*="sapMLnk"]'))) {
+        injectCorrIdButton();
+      }
+    });
+    msgPropertiesObserver.observe(propertiesEl, { childList: true, subtree: true });
+  }
+
+  function stopMsgPropertiesObserver() {
+    if (msgPropertiesObserver) {
+      msgPropertiesObserver.disconnect();
+      msgPropertiesObserver    = null;
+      msgPropertiesObservedEl  = null;
+    }
+    breadcrumbListenerAttached = false;
   }
 
   /* ─────────────────────────────────────────────────────────────────────────
@@ -155,7 +313,7 @@
     btn.id        = BTN_ID;
     btn.className = 'sap-ds-btn sapMBarChild';
     btn.textContent = 'View Data';
-    btn.disabled  = !selectedEntry;
+    btn.dataset.cpiEmpty = selectedEntry ? 'false' : 'true';
     btn.title     = selectedEntry
       ? `View payload — ${selectedEntry.storeName} / ${selectedEntry.id}`
       : 'Select a row first, then click to view its data';
@@ -180,17 +338,12 @@
    * Table row click detection
    * ───────────────────────────────────────────────────────────────────────── */
   function attachTableListeners() {
-    // SAPUI5 renders its list/table items inside elements with these classes
-    const containers = document.querySelectorAll(
-      'table[class*="sapMList"], .sapMList, [class*="sapUiTableCnt"], ' +
-      '[class*="sapMListItems"]'
-    );
-    containers.forEach(container => {
-      if (tablesWatched.has(container)) return;
-      tablesWatched.add(container);
-      // Use capture=true so we get the event before SAPUI5 can stop propagation
-      container.addEventListener('click', onTableRowClick, { capture: true, passive: true });
-    });
+    // Use a single document-level delegate in capture mode so we never miss
+    // a row click due to SAP not having rendered the list containers yet.
+    // onTableRowClick returns early via .closest() for any non-row click.
+    if (dsRowListenerAttached) return;
+    dsRowListenerAttached = true;
+    document.addEventListener('click', onTableRowClick, { capture: true, passive: true });
   }
 
   function onTableRowClick(e) {
@@ -226,7 +379,7 @@
     // Enable button
     const btn = document.getElementById(BTN_ID);
     if (btn) {
-      btn.disabled = false;
+      btn.dataset.cpiEmpty = 'false';
       btn.title = `View payload  |  store: ${storeName}  |  id: ${id}`;
     }
 
@@ -401,6 +554,26 @@
     };
   }
 
+  /**
+   * Reads the currently selected datastore entry directly from the DOM.
+   * SAP marks selected rows with aria-selected="true" — this is always set
+   * regardless of whether our click listener fired, so it works as a reliable
+   * fallback when the first-click race condition occurs.
+   */
+  function readSelectedDsEntry() {
+    for (const row of document.querySelectorAll(
+      'tr.sapMListTblRow[aria-selected="true"], tr.sapMListTblRow.sapMLIBSelected'
+    )) {
+      const id = extractUuidFromRow(row);
+      if (!id) continue;
+      const { storeName, qualifier } = readDataStoreInfo();
+      if (!storeName) continue;
+      const messageId = extractMessageIdFromRow(row, id);
+      return { id, storeName, qualifier, messageId };
+    }
+    return null;
+  }
+
   /* ─────────────────────────────────────────────────────────────────────────
    * View button click handler
    * ───────────────────────────────────────────────────────────────────────── */
@@ -408,13 +581,18 @@
     // Stop SAPUI5 from reacting to clicks on our injected toolbar button,
     // which would trigger a toolbar re-render and nullify our btn reference.
     e?.stopPropagation();
-    if (!selectedEntry) return;
+
+    // Primary: use cached selection from click listener.
+    // Fallback: read SAP's aria-selected row directly from the DOM — covers the
+    // first-click race where the row-click listener hadn't fired yet.
+    const entry = selectedEntry ?? readSelectedDsEntry();
+    if (!entry) return;
 
     // Use e.currentTarget — always the clicked element even if detached from DOM.
     const btn = e?.currentTarget ?? document.getElementById(BTN_ID);
     if (!btn) return;
     const origText = btn.textContent;
-    btn.disabled   = true;
+    btn.dataset.cpiEmpty = 'false';
     btn.textContent = '⏳ Loading…';
 
     try {
@@ -424,7 +602,7 @@
       const csrfToken = await fetchCsrfToken(origin);
 
       // 2. Call the payload API
-      const xmlText = await fetchPayload(origin, csrfToken, selectedEntry);
+      const xmlText = await fetchPayload(origin, csrfToken, entry);
 
       // 3. Extract the base64-encoded zip from the XML response
       const base64 = extractBase64FromXml(xmlText);
@@ -435,13 +613,12 @@
       if (files.length === 0) throw new Error('Zip archive is empty.');
 
       // 5. Show the overlay
-      showOverlay(files, selectedEntry);
+      showOverlay(files, entry);
 
     } catch (err) {
       alert(`SAP CPI Workmate\n\n${err.message}`);
       console.error('[DS Viewer]', err);
     } finally {
-      btn.disabled    = false;
       btn.textContent = origText;
     }
   }
@@ -604,6 +781,8 @@
     if (overlaySettings.size  !== 'm') panel.classList.add(`ds-size-${overlaySettings.size}`);
     if (overlaySettings.theme === 'light') panel.classList.add('ds-theme-light');
     if (overlaySettings.font  !== 'm') panel.classList.add(`ds-font-${overlaySettings.font}`);
+    // Hide the file sidebar when there is only one file (e.g. single attachment)
+    if (files.length === 1) panel.classList.add('ds-single-file');
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const codeEl      = overlay.querySelector('#ds-code');
@@ -772,8 +951,15 @@
     // ── Wrap toggle ─────────────────────────────────────────────────────────
     wrapBtn.addEventListener('click', () => {
       isWrapped = !isWrapped;
-      codeEl.style.whiteSpace = isWrapped ? 'pre-wrap' : 'pre';
-      wrapBtn.textContent     = isWrapped ? 'No Wrap' : 'Wrap';
+      codeEl.style.whiteSpace  = isWrapped ? 'pre-wrap' : 'pre';
+      // word-break:break-all creates break opportunities at every character
+      // boundary, so leading indentation whitespace always stays on the same
+      // visual line as the word that follows it — preventing a spurious blank
+      // line when a deeply-indented element has a very long text value
+      // (e.g. XML <SerialNumberList> with hundreds of comma-separated values).
+      codeEl.style.wordBreak   = isWrapped ? 'break-all' : 'normal';
+      codeEl.style.overflowWrap = 'normal'; // break-all handles all wrapping
+      wrapBtn.textContent        = isWrapped ? 'No Wrap' : 'Wrap';
       wrapBtn.classList.toggle('ds-btn-on', isWrapped);
     });
 
@@ -871,10 +1057,11 @@
         <div id="ds-header">
           <div id="ds-header-meta">
             <span id="ds-store-name">${h(storeName)}</span>
+            ${id ? `
             <div class="ds-id-row">
               <span id="ds-entry-id" title="${h(id)}">${h(id)}</span>
               <button class="ds-mini-copy" id="ds-copy-entry-id" title="Copy ID">Copy</button>
-            </div>
+            </div>` : ''}
             ${messageId ? `
             <div class="ds-id-row">
               <span id="ds-msg-id" title="${h(messageId)}">${h(messageId)}</span>
@@ -1229,8 +1416,11 @@
     btn.id        = JMS_BTN_ID;
     btn.className = 'sap-ds-btn sapMBarChild';
     btn.textContent = 'View Data';
-    btn.disabled  = !jmsSelectedEntry;
-    btn.title     = jmsSelectedEntry
+    // Use data-cpi-empty instead of disabled so clicks always fire
+    // (disabled prevents the click event, causing the first-click race)
+    const hasSelection = !!jmsSelectedEntry;
+    btn.dataset.cpiEmpty = hasSelection ? 'false' : 'true';
+    btn.title = hasSelection
       ? `View JMS payload — ${jmsSelectedEntry.name} / ${jmsSelectedEntry.msgId}`
       : 'Select a message row first, then click to view its data';
     btn.addEventListener('click', onJmsViewClick);
@@ -1248,14 +1438,12 @@
 
   /* ── Table / list listeners ───────────────────────────────────────────── */
   function attachJmsTableListeners() {
-    const containers = document.querySelectorAll(
-      'table[class*="sapMList"], .sapMList, [class*="sapUiTableCnt"], [class*="sapMListItems"]'
-    );
-    containers.forEach(container => {
-      if (jmsTablesWatched.has(container)) return;
-      jmsTablesWatched.add(container);
-      container.addEventListener('click', onJmsRowClick, { capture: true, passive: true });
-    });
+    // Use a single document-level delegate in capture mode so we never miss
+    // a row click due to SAP not having rendered the list containers yet.
+    // onJmsRowClick returns early via .closest() for any non-row click.
+    if (jmsRowListenerAttached) return;
+    jmsRowListenerAttached = true;
+    document.addEventListener('click', onJmsRowClick, { capture: true, passive: true });
   }
 
   function onJmsRowClick(e) {
@@ -1283,7 +1471,7 @@
         jmsSelectedEntry = null;
         const oldBtn = document.getElementById(JMS_BTN_ID);
         if (oldBtn) {
-          oldBtn.disabled = true;
+          oldBtn.dataset.cpiEmpty = 'true';
           oldBtn.title = 'Select a message row first, then click to view its data';
         }
       }
@@ -1304,8 +1492,8 @@
 
     const btn = document.getElementById(JMS_BTN_ID);
     if (btn) {
-      btn.disabled = false;
-      btn.title    = name
+      btn.dataset.cpiEmpty = 'false';
+      btn.title = name
         ? `View JMS payload  |  queue: ${name}  |  ${msgId}`
         : `View JMS payload  |  ${msgId}`;
     }
@@ -1355,21 +1543,24 @@
   }
 
   /**
-   * Extracts the JMS Message ID (e.g. "ID:10.157.178.781f719e478df7a80:53").
+   * Extracts the JMS Message ID (e.g. "ID:10.157.178.781f719e478df7a80:53"
+   * or "x-hex-49443a31302e...").
    *
-   * Uses a TreeWalker over raw text nodes so it works in both layouts:
-   *   • Table layout  — ID text sits inside a <td>
-   *   • Responsive list layout — ID text sits inside a <span> or <bdi>
+   * The ID is always in the first visible cell (td.sapMTblFirstVisibleCell).
+   * SAP stores the full untruncated value in that cell's child element's
+   * `title` attribute even when the visible text is clipped with an ellipsis.
+   *
+   * We scan ALL titled elements in the cell and validate against the JMS ID
+   * pattern — some row layouts have other titled elements (e.g. search links)
+   * before the actual ID span.
    */
   function extractJmsMsgId(row) {
-    // Older tenants use "ID:10.157.178.78:..." format
-    // Newer tenants use "x-hex-000000000000001a" format (SAP updated ~2026)
-    const JMS_ID_RE = /^ID:\d+\.\d+|^x-hex-[0-9a-f]+/i;
-    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.textContent?.trim() || '';
-      if (JMS_ID_RE.test(text)) return text;
+    const JMS_ID_RE = /^(ID:\d|x-hex-[0-9a-f])/i;
+    const firstCell = row.querySelector('td.sapMTblFirstVisibleCell');
+    if (!firstCell) return null;
+    for (const el of firstCell.querySelectorAll('[title]')) {
+      const t = el.title?.trim() || '';
+      if (JMS_ID_RE.test(t)) return t;
     }
     return null;
   }
@@ -1443,16 +1634,43 @@
     return null;
   }
 
+  /**
+   * Reads the currently selected JMS message row directly from the DOM.
+   * SAP marks selected rows with aria-selected="true" — this is always set
+   * regardless of whether our click listener fired, so it works as a reliable
+   * fallback when the first-click race condition occurs.
+   */
+  function readSelectedJmsEntry() {
+    for (const row of document.querySelectorAll(
+      'tr.sapMListTblRow[aria-selected="true"], tr.sapMListTblRow.sapMLIBSelected'
+    )) {
+      const msgId = extractJmsMsgId(row);
+      if (!msgId) continue; // queue rows have no valid JMS ID
+      return {
+        msgId,
+        name:      jmsQueueName || readJmsQueueNameFromDom() || '',
+        failed:    extractJmsFailed(row),
+        messageId: extractJmsMessageId(row),
+      };
+    }
+    return null;
+  }
+
   /* ── View button click ────────────────────────────────────────────────── */
   async function onJmsViewClick(e) {
     e?.stopPropagation();
-    if (!jmsSelectedEntry) return;
+
+    // Primary: use cached selection from click listener.
+    // Fallback: read SAP's aria-selected row directly from the DOM — covers the
+    // first-click race where the row-click listener hadn't fired yet.
+    const entry = jmsSelectedEntry ?? readSelectedJmsEntry();
+    if (!entry) return;
 
     // Resolve queue name if not already captured (e.g. queue selected via > arrow)
-    if (!jmsSelectedEntry.name) {
-      jmsSelectedEntry.name = jmsQueueName || readJmsQueueNameFromDom() || '';
+    if (!entry.name) {
+      entry.name = jmsQueueName || readJmsQueueNameFromDom() || '';
     }
-    if (!jmsSelectedEntry.name) {
+    if (!entry.name) {
       alert('SAP CPI Workmate\n\nCould not determine the queue name.\nPlease click directly on the queue name text in the left panel, then select a message row.');
       return;
     }
@@ -1460,28 +1678,27 @@
     const btn = e?.currentTarget ?? document.getElementById(JMS_BTN_ID);
     if (!btn) return;
     const origText = btn.textContent;
-    btn.disabled    = true;
+    btn.dataset.cpiEmpty = 'false';
     btn.textContent = '⏳ Loading…';
 
     try {
       const origin = `${location.protocol}//${location.host}`;
-      const buffer = await fetchJmsPayload(origin, jmsSelectedEntry);
+      const buffer = await fetchJmsPayload(origin, entry);
       const files  = await unzipFromBuffer(buffer);
       if (files.length === 0) throw new Error('Zip archive is empty.');
 
       // Prefer the clean Message ID column value for filenames;
       // fall back to sanitized JMS Message ID if the column was empty.
-      const safeJmsId = jmsSelectedEntry.msgId.replace(/[:\\/?*|"<>\s]/g, '_');
+      const safeJmsId = entry.msgId.replace(/[:\\/?*|"<>\s]/g, '_');
       showOverlay(files, {
-        storeName: jmsSelectedEntry.name,
-        id:        jmsSelectedEntry.msgId,
-        messageId: jmsSelectedEntry.messageId || safeJmsId,
+        storeName: entry.name,
+        id:        entry.msgId,
+        messageId: entry.messageId || safeJmsId,
       });
     } catch (err) {
       alert(`SAP CPI Workmate\n\n${err.message}`);
       console.error('[JMS Viewer]', err);
     } finally {
-      btn.disabled    = false;
       btn.textContent = origText;
     }
   }
@@ -1548,6 +1765,563 @@
 
     results.sort((a, b) => a.name.localeCompare(b.name));
     return results;
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+   * Message Processing Logs — Correlated Messages Viewer
+   * ─────────────────────────────────────────────────────────────────────────
+   * URL:  /shell/monitoring/Messages/*
+   *
+   * Injects a small button next to the Correlation ID on the Properties tab.
+   * Clicking it fetches all messages sharing that Correlation ID via OData and
+   * shows them in a table overlay. Clicking a row opens the message detail page
+   * in a new tab.
+   *
+   * API:  GET /odata/api/v1/MessageProcessingLogs?$format=json
+   *            &$orderby=LogEnd desc&$top=50
+   *            &$filter=CorrelationId eq '<id>'
+   * Auth: existing session cookies — no CSRF needed (GET request)
+   * ───────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Finds the Correlation ID link rendered by SAPUI5 on the Properties tab
+   * and injects a small "View Correlated" button immediately after it.
+   * Safe to call repeatedly — skips re-injection if the same Correlation ID
+   * is already present; removes and re-injects when the ID changes.
+   */
+  function injectCorrIdButton() {
+    // SAP renders the Correlation ID as a link with a stable element id
+    const corrLink =
+      document.getElementById('MESSAGES_INFO_CORRELATION_ID') ||
+      document.querySelector('a[id*="CORRELATION_ID"][class*="sapMLnk"]');
+
+    if (!corrLink) {
+      document.getElementById(MSG_BTN_ID)?.remove();
+      // Correlation ID link not in DOM yet (SAPUI5 still rendering).
+      // Retry up to CORR_ID_MAX_RETRIES times, 1 s apart, to handle both
+      // SPA async renders and cold page-load scenarios (e.g. returning from
+      // /shell/monitoring/MessageDetails which does a full page navigation).
+      const url = location.href.toLowerCase();
+      if (url.includes('/monitoring/messages') && !url.includes('messagequeues')
+          && corrIdRetryCount < CORR_ID_MAX_RETRIES) {
+        corrIdRetryCount++;
+        clearTimeout(corrIdRetryTimer);
+        corrIdRetryTimer = setTimeout(injectCorrIdButton, 1000);
+      }
+      return;
+    }
+    // Found — cancel any pending retry and reset counter
+    clearTimeout(corrIdRetryTimer);
+    corrIdRetryCount = 0;
+
+    const corrId = corrLink.querySelector('.sapMLnkText')?.textContent?.trim();
+    if (!corrId) return;
+
+    // Skip if already injected for this exact Correlation ID
+    const existing = document.getElementById(MSG_BTN_ID);
+    if (existing && existing.dataset.corrId === corrId) return;
+    existing?.remove();
+
+    const btn = document.createElement('button');
+    btn.id             = MSG_BTN_ID;
+    btn.dataset.corrId = corrId;
+    btn.className = 'sap-msg-corr-btn';
+    btn.title     = `View all correlated messages (${corrId})`;
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+    btn.addEventListener('click', e => { e.stopPropagation(); onCorrIdClick(corrId); });
+
+    corrLink.insertAdjacentElement('afterend', btn);
+
+    // Start the Properties observer now that we know the section exists,
+    // so SAPUI5 re-renders don't silently wipe our button.
+    startMsgPropertiesObserver();
+  }
+
+  /** Fetches correlated messages and shows them in the table overlay. */
+  async function onCorrIdClick(corrId) {
+    const btn      = document.getElementById(MSG_BTN_ID);
+    const origHTML = btn?.innerHTML;
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; }
+
+    try {
+      const origin = `${location.protocol}//${location.host}`;
+      const pfx    = location.pathname.startsWith('/itspaces/') ? '/itspaces' : '';
+      const filter = `CorrelationId eq '${corrId}'`;
+      const url    =
+        `${origin}${pfx}${MSG_LOG_API_PATH}` +
+        `?$format=json&$orderby=LogStart desc&$top=50` +
+        `&$filter=${encodeURIComponent(filter)}`;
+
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new Error(`API error: HTTP ${res.status} ${res.statusText}`);
+
+      const json     = await res.json();
+      const messages = json?.d?.results ?? [];
+
+      if (messages.length === 0) {
+        alert(`SAP CPI Workmate\n\nNo messages found for Correlation ID:\n${corrId}`);
+        return;
+      }
+
+      showMsgLogOverlay(messages, corrId);
+    } catch (err) {
+      alert(`SAP CPI Workmate\n\n${err.message}`);
+      console.error('[Correlated Messages]', err);
+    } finally {
+      if (btn) { btn.disabled = false; btn.style.opacity = ''; btn.blur(); }
+    }
+  }
+
+  /**
+   * Parses SAP OData date format /Date(milliseconds)/ into a
+   * human-readable local datetime string.
+   */
+  function parseSapDate(dateStr) {
+    const m = /\/Date\((\d+)\)\//.exec(dateStr ?? '');
+    if (!m) return dateStr ?? '—';
+    return new Date(parseInt(m[1])).toLocaleString(undefined, {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  }
+
+  /** Returns a CSS class name for a given SAP message status string. */
+  function msgStatusClass(status) {
+    const s = (status ?? '').toUpperCase();
+    if (s === 'COMPLETED')  return 'msg-status-completed';
+    if (s === 'FAILED')     return 'msg-status-failed';
+    if (s === 'RETRY')      return 'msg-status-retry';
+    if (s === 'PROCESSING') return 'msg-status-processing';
+    if (s === 'ESCALATED')  return 'msg-status-escalated';
+    return 'msg-status-other';
+  }
+
+  /**
+   * Renders the correlated-messages table overlay.
+   * Each row is clickable and opens the message detail page in a new tab.
+   */
+  function showMsgLogOverlay(messages, corrId) {
+    document.getElementById(MSG_LOG_OVERLAY_ID)?.remove();
+
+    const origin    = `${location.protocol}//${location.host}`;
+    const baseShell = location.pathname.startsWith('/itspaces/') ? '/itspaces/shell' : '/shell';
+    const msgBase   = `${origin}${baseShell}/monitoring/Messages/`;
+
+    const thStyle = () => '';
+
+    // Column definitions: [label, sortKey, sortType]
+    // sortType: 'str' | 'date' | 'duration'
+    const COLS = [
+      ['Status',           'Status',              'str'],
+      ['Integration Flow', 'IntegrationFlowName', 'str'],
+      ['Custom Status',    'CustomStatus',        'str'],
+      ['App Message ID',   'ApplicationMessageId','str'],
+      ['Sender',           'Sender',              'str'],
+      ['Receiver',         'Receiver',            'str'],
+      ['Start Time',       'LogStart',            'date'],
+      ['End Time',         'LogEnd',              'date'],
+      ['Duration',         '_duration',           'duration'],
+      ['Message GUID',     'MessageGuid',         'str'],
+    ];
+
+    // Sort state — default: Start Time descending (matches API order)
+    let sortCol = 'LogStart', sortDir = 'desc';
+
+    function sapDateMs(val) {
+      const m = /\/Date\((\d+)\)\//.exec(val ?? '');
+      return m ? parseInt(m[1]) : 0;
+    }
+
+    function durationMs(msg) {
+      const start = sapDateMs(msg.LogStart);
+      const end   = sapDateMs(msg.LogEnd);
+      return (start && end) ? end - start : 0;
+    }
+
+    function formatDuration(ms) {
+      if (!ms || ms < 0) return '—';
+      if (ms < 1000)          return `${ms} ms`;
+      const s = Math.floor(ms / 1000),   rem1 = ms % 1000;
+      if (s < 60)             return `${s}s ${rem1}ms`;
+      const m = Math.floor(s / 60),      rem2 = s % 60;
+      if (m < 60)             return `${m}m ${rem2}s`;
+      const hh = Math.floor(m / 60),     rem3 = m % 60;
+      if (hh < 24)            return `${hh}h ${rem3}m`;
+      const d  = Math.floor(hh / 24),    rem4 = hh % 24;
+      return `${d}d ${rem4}h`;
+    }
+
+    function sortedMessages() {
+      return [...messages].sort((a, b) => {
+        const col  = COLS.find(c => c[1] === sortCol);
+        const type = col?.[2] ?? 'str';
+        let cmp;
+        if (type === 'date') {
+          cmp = sapDateMs(a[sortCol]) - sapDateMs(b[sortCol]);
+        } else if (type === 'duration') {
+          cmp = durationMs(a) - durationMs(b);
+        } else {
+          cmp = String(a[sortCol] ?? '').localeCompare(String(b[sortCol] ?? ''));
+        }
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+    }
+
+    function buildRowsHtml(sorted) {
+      return sorted.map(m => {
+        const url = msgBase + JSON.stringify({ identifier: m.MessageGuid });
+        return `
+          <tr class="msg-log-row" data-url="${h(url)}">
+            <td><span class="msg-status-badge ${msgStatusClass(m.Status)}">${h(m.Status ?? '—')}</span></td>
+            <td class="msg-flow-cell" title="${h(m.IntegrationFlowName ?? '')}">${h(m.IntegrationFlowName ?? '—')}</td>
+            <td>${h(m.CustomStatus ?? '—')}</td>
+            <td class="msg-id-cell" title="${h(m.ApplicationMessageId ?? '')}">${h(m.ApplicationMessageId ?? '—')}</td>
+            <td class="msg-meta-cell" title="${h(m.Sender ?? '')}">${h(m.Sender ?? '—')}</td>
+            <td class="msg-meta-cell" title="${h(m.Receiver ?? '')}">${h(m.Receiver ?? '—')}</td>
+            <td class="msg-time-cell">${h(parseSapDate(m.LogStart))}</td>
+            <td class="msg-time-cell">${h(parseSapDate(m.LogEnd))}</td>
+            <td class="msg-duration-cell">${h(formatDuration(durationMs(m)))}</td>
+            <td class="msg-guid-cell">
+              <div class="msg-guid-wrap">
+                <span class="msg-guid-text">${h(m.MessageGuid ?? '—')}</span>
+                <button class="msg-guid-copy-btn" data-guid="${h(m.MessageGuid ?? '')}" title="Copy Message GUID"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              </div>
+            </td>
+          </tr>`;
+      }).join('');
+    }
+
+    const rowsHtml = buildRowsHtml(sortedMessages());
+
+    const themeClass = overlaySettings.theme === 'light' ? 'ds-theme-light' : '';
+    const sizeClass  = overlaySettings.size !== 'm' ? `ds-size-${overlaySettings.size}` : '';
+
+    const overlay = document.createElement('div');
+    overlay.id    = MSG_LOG_OVERLAY_ID;
+    overlay.innerHTML = `
+      <div id="msg-log-backdrop"></div>
+      <div id="msg-log-panel" class="${themeClass} ${sizeClass}">
+        <div id="msg-log-header">
+          <div id="msg-log-header-meta">
+            <span id="msg-log-title">Correlated Messages</span>
+            <span id="msg-log-corr-id" title="${h(corrId)}">${h(corrId)}</span>
+            <button id="msg-log-corr-open-btn" title="Open correlated messages in new tab">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+            <span id="msg-log-count">${messages.length} message${messages.length !== 1 ? 's' : ''}</span>
+          </div>
+          <button id="msg-log-close-btn" title="Close (Esc)">✕</button>
+        </div>
+        <div id="msg-log-body">
+          <table id="msg-log-table">
+            <thead>
+              <tr>
+                ${COLS.map(([label, key], i) => `
+                  <th class="msg-col-resizable msg-col-sortable${key === sortCol ? ' msg-col-sorted' : ''}"
+                      data-sort-key="${key}" ${thStyle(i)}>
+                    <span class="msg-col-label">${label}</span>
+                    <span class="msg-sort-icon">${key === sortCol ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
+                  </th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    // ── Attach row + copy handlers (called after every sort re-render) ───────
+    function attachRowHandlers() {
+      overlay.querySelectorAll('.msg-log-row').forEach(row => {
+        row.addEventListener('click', () => window.open(row.dataset.url, '_blank'));
+      });
+      overlay.querySelectorAll('.msg-guid-copy-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(btn.dataset.guid).then(() => {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+            btn.classList.add('msg-guid-copied');
+            setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('msg-guid-copied'); }, 1500);
+          });
+        });
+      });
+    }
+    attachRowHandlers();
+
+    // ── Column sort ───────────────────────────────────────────────────────────
+    overlay.querySelectorAll('th.msg-col-sortable').forEach(th => {
+      th.addEventListener('click', e => {
+        // Ignore clicks on the resize handle itself
+        if (e.target.closest('.msg-col-resize-handle')) return;
+        // Ignore clicks that followed a resize drag — flag is set in onMove below
+        if (th._cpiResized) { th._cpiResized = false; return; }
+        const key = th.dataset.sortKey;
+        if (sortCol === key) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortCol = key;
+          sortDir = 'asc';
+        }
+        // Re-render tbody
+        overlay.querySelector('#msg-log-table tbody').innerHTML = buildRowsHtml(sortedMessages());
+        attachRowHandlers();
+        // Update header indicators
+        overlay.querySelectorAll('th.msg-col-sortable').forEach(t => {
+          const isActive = t.dataset.sortKey === sortCol;
+          t.classList.toggle('msg-col-sorted', isActive);
+          t.querySelector('.msg-sort-icon').textContent = isActive ? (sortDir === 'asc' ? '▲' : '▼') : '';
+        });
+      });
+    });
+
+    // ── Resizable columns ─────────────────────────────────────────────────────
+    // Widths already baked into HTML from storage read above.
+    // Inject drag handles and save on release using column index as key.
+    const ths = Array.from(overlay.querySelectorAll('th.msg-col-resizable'));
+
+    ths.forEach((th, idx) => {
+      const handle = document.createElement('span');
+      handle.className = 'msg-col-resize-handle';
+      th.appendChild(handle);
+
+      handle.addEventListener('mousedown', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        th._cpiResized = false;
+        const startX = e.clientX;
+        const startW = th.offsetWidth;
+
+        const tip = document.createElement('div');
+        tip.className   = 'msg-col-resize-tip';
+        tip.textContent = `${startW}px`;
+        tip.style.left  = `${e.clientX + 12}px`;
+        tip.style.top   = `${e.clientY + 12}px`;
+        document.body.appendChild(tip);
+
+        const onMove = ev => {
+          // Mark that a real drag happened — click handler will skip sorting
+          if (Math.abs(ev.clientX - startX) > 3) th._cpiResized = true;
+          const newW = Math.max(60, startW + ev.clientX - startX);
+          th.style.width    = `${newW}px`;
+          th.style.minWidth = `${newW}px`;
+          tip.textContent   = `${newW}px`;
+          tip.style.left    = `${ev.clientX + 12}px`;
+          tip.style.top     = `${ev.clientY + 12}px`;
+        };
+        const onUp = () => {
+          tip.remove();
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+
+    // Correlation ID header icon → open SAP messages page using correlation ID as identifier
+    overlay.querySelector('#msg-log-corr-open-btn')?.addEventListener('click', e => {
+      e.stopPropagation();
+      window.open(msgBase + JSON.stringify({ identifier: corrId }), '_blank');
+    });
+
+    // Close handlers
+    function closeMsgOverlay() {
+      overlay._removeKeyListener?.();
+      overlay.remove();
+    }
+    overlay.querySelector('#msg-log-backdrop').addEventListener('click', closeMsgOverlay);
+    overlay.querySelector('#msg-log-close-btn').addEventListener('click', closeMsgOverlay);
+    const onKeyDown = e => { if (e.key === 'Escape') closeMsgOverlay(); };
+    document.addEventListener('keydown', onKeyDown);
+    overlay._removeKeyListener = () => document.removeEventListener('keydown', onKeyDown);
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+   * Message Attachment Viewer
+   * ─────────────────────────────────────────────────────────────────────────
+   * Injects an "Open" (eye) icon button next to every "Download attachment"
+   * button in the Attachments tab of the Messages detail panel.
+   *
+   * Strategy — uses the same API SAP calls when loading the Attachments tab:
+   *   GET /odata/api/v1/MessageProcessingLogs('<guid>')/Attachments?$format=json
+   * This returns each attachment's Id (hex key) and ContentType.  We then
+   * fetch the content via:
+   *   GET /odata/api/v1/MessageProcessingLogAttachments('<Id>')/$value
+   * and display it in the existing overlay with auto-formatting (XML/JSON/text).
+   *
+   * The MessageGuid is read from #MESSAGES_INFO_MESSAGE_GUID — a stable DOM
+   * element SAP renders in the Properties panel.  No SAPUI5 model access or
+   * script injection required.
+   * ───────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Appends a file extension to an attachment name based on its MIME type,
+   * so detectType() can identify the content even without a file extension.
+   * SAP attachment names often lack extensions (e.g. "ODataV2_Request_Headers").
+   */
+  function attachExtension(name, contentType) {
+    if (!contentType || /\.(xml|json|txt|html|csv)$/i.test(name)) return name;
+    const ct = contentType.toLowerCase();
+    if (ct.includes('xml'))  return name + '.xml';
+    if (ct.includes('json')) return name + '.json';
+    if (ct.includes('html')) return name + '.html';
+    if (ct.includes('text')) return name + '.txt';
+    return name;
+  }
+
+  /**
+   * Reads the currently-selected message's GUID from the Properties panel.
+   * SAP renders this in a stable element: id="MESSAGES_INFO_MESSAGE_GUID".
+   */
+  function readMessageGuid() {
+    const el = document.getElementById('MESSAGES_INFO_MESSAGE_GUID');
+    return el?.textContent?.trim() || null;
+  }
+
+  /**
+   * Calls the OData Attachments navigation property for the given MessageGuid
+   * and returns the array of attachment metadata objects.
+   * Each object has: Id (hex key), Name, ContentType, PayloadSize, TimeStamp.
+   */
+  async function fetchAttachmentList(messageGuid) {
+    const pfx    = location.pathname.startsWith('/itspaces/') ? '/itspaces' : '';
+    const origin = `${location.protocol}//${location.host}`;
+    const url    =
+      `${origin}${pfx}/odata/api/v1/MessageProcessingLogs('${messageGuid}')` +
+      `/Attachments?$format=json`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) {
+      throw new Error(
+        `Attachment list API failed: HTTP ${res.status} ${res.statusText}`
+      );
+    }
+    const json = await res.json();
+    return json?.d?.results ?? [];
+  }
+
+  /**
+   * Finds all "Download attachment" buttons in the Attachments table and
+   * injects an "Open" eye icon button immediately after each one.
+   * Safe to call repeatedly — skips buttons that already have an open button.
+   */
+  function injectAttachmentOpenButtons() {
+    const dlButtons = document.querySelectorAll(
+      'button[id*="MESSAGECONTENT_TABLE_ATTACHMENTS"][title="Download attachment"]'
+    );
+    if (!dlButtons.length) return;
+
+    dlButtons.forEach(dlBtn => {
+      const tr       = dlBtn.closest('tr');
+      const nameCell = tr?.querySelectorAll('td')[1]; // Name column
+
+      // Skip if already injected into the name cell
+      if (nameCell?.querySelector(`.${ATTACH_OPEN_BTN_CLASS}`)) return;
+
+      // Extract the zero-based row index from the SAP button id (ends in "-0", "-1", …)
+      const idxMatch = dlBtn.id.match(/-(\d+)$/);
+      const rowIdx   = idxMatch ? parseInt(idxMatch[1], 10) : -1;
+
+      const openBtn = document.createElement('button');
+      openBtn.className = ATTACH_OPEN_BTN_CLASS;
+      openBtn.title = 'Open attachment in viewer';
+      openBtn.innerHTML =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" ` +
+        `viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+        `stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">` +
+        `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>` +
+        `<circle cx="12" cy="12" r="3"/></svg>`;
+
+      openBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const origHTML        = openBtn.innerHTML;
+        openBtn.disabled      = true;
+        openBtn.style.opacity = '0.4';
+
+        try {
+          // 1. Get MessageGuid from the stable Properties-panel element
+          const messageGuid = readMessageGuid();
+          if (!messageGuid) {
+            throw new Error(
+              'Could not find Message GUID on this page.\n' +
+              'Make sure the Properties tab is visible and a message is selected.'
+            );
+          }
+
+          // 2. Fetch the attachment list for this message
+          const attachments = await fetchAttachmentList(messageGuid);
+          if (!attachments.length) {
+            throw new Error('No attachments returned by the API for this message.');
+          }
+
+          // 3. Pick the correct attachment by row index (most reliable),
+          //    fall back to first if index is out of range
+          const attachment = (rowIdx >= 0 && rowIdx < attachments.length)
+            ? attachments[rowIdx]
+            : attachments[0];
+
+          const attachId    = attachment.Id;
+          const name        = attachment.Name        || 'attachment';
+          const contentType = attachment.ContentType || '';
+
+          // 4. Fetch the raw attachment content
+          const pfx    = location.pathname.startsWith('/itspaces/') ? '/itspaces' : '';
+          const origin = `${location.protocol}//${location.host}`;
+          const url    = `${origin}${pfx}${ATTACH_API_PATH}('${attachId}')/$value`;
+
+          const res = await fetch(url, {
+            method:      'GET',
+            headers:     { Accept: '*/*' },
+            credentials: 'include',
+          });
+          if (!res.ok) {
+            throw new Error(
+              `Content fetch failed: HTTP ${res.status} ${res.statusText}`
+            );
+          }
+
+          const text = await res.text();
+
+          // 5. Display in overlay with auto-formatting
+          //    id:'' → no entry-ID row in header; download filename = name.ext
+          const displayName = attachExtension(name, contentType);
+          showOverlay(
+            [{ name: displayName, content: text, isBinary: false }],
+            { storeName: name, id: '', messageId: null }
+          );
+
+        } catch (err) {
+          alert(`SAP CPI Workmate\n\nFailed to load attachment:\n${err.message}`);
+          console.error('[Attachment Viewer]', err);
+        } finally {
+          openBtn.disabled      = false;
+          openBtn.style.opacity = '';
+          openBtn.innerHTML     = origHTML;
+        }
+      });
+
+      // Append inside the SAP HLayout div that wraps the attachment name link.
+      // The <td> has overflow:clip so we must inject inside the existing layout
+      // container — appending directly to the <td> gets clipped invisibly.
+      const nameLayout = nameCell?.querySelector('.sapUiHLayout') || nameCell;
+      if (nameLayout) {
+        // Allow the layout to grow to accommodate the button without bleeding
+        // into adjacent table columns.
+        nameLayout.style.overflow   = 'visible';
+        nameLayout.style.display    = 'inline-flex';
+        nameLayout.style.alignItems = 'center';
+        if (nameCell) {
+          nameCell.style.overflow  = 'visible';
+          nameCell.style.whiteSpace = 'nowrap';
+        }
+        nameLayout.appendChild(openBtn);
+      } else {
+        dlBtn.insertAdjacentElement('afterend', openBtn);
+      }
+    });
   }
 
 })();
