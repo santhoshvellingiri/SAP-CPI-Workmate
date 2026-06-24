@@ -11,3 +11,6 @@ Thumbs.db
 
 # Logs / temp
 *.log
+
+# Claude Cowork session context — local only, not for version control
+CLAUDE.md

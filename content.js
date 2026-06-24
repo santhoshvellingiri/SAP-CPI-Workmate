@@ -1486,7 +1486,7 @@
     const failed    = extractJmsFailed(row);
     const messageId = extractJmsMessageId(row);  // Message ID column (AGoO1-…)
     // Queue name resolved now if possible; if not, we retry at button-click time
-    const name = jmsQueueName || readJmsQueueNameFromDom() || '';
+    const name = readJmsQueueNameFromDom() || jmsQueueName || '';
 
     jmsSelectedEntry = { msgId, name, failed, messageId };
 
@@ -1648,7 +1648,7 @@
       if (!msgId) continue; // queue rows have no valid JMS ID
       return {
         msgId,
-        name:      jmsQueueName || readJmsQueueNameFromDom() || '',
+        name:      readJmsQueueNameFromDom() || jmsQueueName || '',
         failed:    extractJmsFailed(row),
         messageId: extractJmsMessageId(row),
       };
@@ -1666,10 +1666,10 @@
     const entry = jmsSelectedEntry ?? readSelectedJmsEntry();
     if (!entry) return;
 
-    // Resolve queue name if not already captured (e.g. queue selected via > arrow)
-    if (!entry.name) {
-      entry.name = jmsQueueName || readJmsQueueNameFromDom() || '';
-    }
+    // Always re-read the queue name from DOM right before the API call.
+    // The cached entry.name (or jmsQueueName) may be stale if the user switched
+    // queues without triggering a queue-row click (e.g. scroll, arrow, keyboard).
+    entry.name = readJmsQueueNameFromDom() || entry.name || jmsQueueName || '';
     if (!entry.name) {
       alert('SAP CPI Workmate\n\nCould not determine the queue name.\nPlease click directly on the queue name text in the left panel, then select a message row.');
       return;
@@ -2223,6 +2223,11 @@
       const idxMatch = dlBtn.id.match(/-(\d+)$/);
       const rowIdx   = idxMatch ? parseInt(idxMatch[1], 10) : -1;
 
+      // Capture the visible attachment name NOW (before we mutate the cell by
+      // appending our button), so the click handler can match by name rather
+      // than by index — API response order ≠ UI table display order.
+      const visibleName = nameCell?.textContent?.trim() || '';
+
       const openBtn = document.createElement('button');
       openBtn.className = ATTACH_OPEN_BTN_CLASS;
       openBtn.title = 'Open attachment in viewer';
@@ -2257,11 +2262,13 @@
             throw new Error('No attachments returned by the API for this message.');
           }
 
-          // 3. Pick the correct attachment by row index (most reliable),
-          //    fall back to first if index is out of range
-          const attachment = (rowIdx >= 0 && rowIdx < attachments.length)
-            ? attachments[rowIdx]
-            : attachments[0];
+          // 3. Match by the visible name captured at injection time — most reliable
+          //    because API response order does not match UI table display order.
+          //    Fall back to row index, then first entry, if no name match found.
+          const attachment =
+            (visibleName && attachments.find(a => a.Name === visibleName)) ||
+            (rowIdx >= 0 && rowIdx < attachments.length ? attachments[rowIdx] : null) ||
+            attachments[0];
 
           const attachId    = attachment.Id;
           const name        = attachment.Name        || 'attachment';
