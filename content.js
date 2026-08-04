@@ -509,37 +509,46 @@
   }
 
   /**
-   * Reads the store name and qualifier from the ObjectPage header.
+   * Reads the store name and qualifier from the detail panel header.
    *
-   * Confirmed DOM structure (from DevTools inspection):
+   * The reliable anchor is [class*="sapUxAPObjectPageHeaderTitle"] — the ObjectPage
+   * header title container. It is present in both old and new CPI layouts, and it
+   * scopes exclusively to the detail panel (the outer page "Manage Data Stores"
+   * heading lives inside sapFDynamicPageTitleWrapper, not sapUxAPObjectPageHeaderTitle).
    *
-   *   <h2 class="sapUxAPObjectPageHeaderIdentifierTitle …">
-   *     <span class="sapUxAPObjectPageHeaderTitleText …">FlowWebhookTest</span>
-   *   </h2>
-   *   <div class="sapUxAPObjectPageHeaderIdentifierDescription …">FlowWebhookTest</div>
-   *                                                               ↑ "Global" when scope = Global
+   * Confirmed from live XHR interception of SAP's own Download button (2025 layout):
+   *   storeName = .sapMTitle text inside the header  (may be abbreviated display name)
+   *   qualifier = [class*="sapMText"] text inside the header  (full technical name)
+   *   These two CAN differ — SAP sends them as separate fields.
+   *
+   * Old layout fallback:
+   *   qualifier = [class*="sapUxAPObjectPageHeaderIdentifierDescription"] text
    *
    * qualifier === "Global"  →  omit qualifier from the API request body (see fetchPayload).
    * qualifier !== "Global"  →  include qualifier in the API request body.
    */
   function readDataStoreInfo() {
 
-    // ── Primary: exact classes confirmed from DevTools ───────────────────────
-    const titleEl = document.querySelector(
-      '[class*="sapUxAPObjectPageHeaderTitleText"]'
-    );
-    const subtitleEl = document.querySelector(
-      '[class*="sapUxAPObjectPageHeaderIdentifierDescription"]'
-    );
-
-    if (titleEl) {
-      const storeName = titleEl.textContent?.trim() || '';
-      const qualifier = subtitleEl?.textContent?.trim() || storeName;
-      if (storeName) return { storeName, qualifier };
+    // ── Primary: sapUxAPObjectPageHeaderTitle scopes to the detail panel only ──
+    // Works in both layout generations (confirmed via DevTools + XHR interception).
+    const objPageHeader = document.querySelector('[class*="sapUxAPObjectPageHeaderTitle"]');
+    if (objPageHeader) {
+      const titleEl = objPageHeader.querySelector('.sapMTitle');
+      const storeName = titleEl?.textContent?.trim() || '';
+      if (storeName) {
+        // New layout: qualifier is a sapMText control (full technical name, may differ from title).
+        // Old layout: qualifier is inside sapUxAPObjectPageHeaderIdentifierDescription.
+        // Default: storeName (correct for non-Global stores when no subtitle element exists).
+        const qualifierEl =
+          objPageHeader.querySelector('[class*="sapMText"]') ||
+          objPageHeader.querySelector('[class*="sapUxAPObjectPageHeaderIdentifierDescription"]') ||
+          document.querySelector('[class*="sapUxAPObjectPageHeaderIdentifierDescription"]');
+        const qualifier = qualifierEl?.textContent?.trim() || storeName;
+        return { storeName, qualifier };
+      }
     }
 
-    // ── Fallback: any title element NOT inside a button or toolbar ───────────
-    // Guards against future layout changes or different SAPUI5 versions.
+    // ── Fallback: generic sweep of title elements not inside buttons/toolbars ──
     const seen = new Set();
     const collected = [];
     document.querySelectorAll('.sapMTitleText, .sapMTitle > bdi, h2 > span').forEach(el => {

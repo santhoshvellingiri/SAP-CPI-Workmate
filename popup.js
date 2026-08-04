@@ -1,3 +1,8 @@
+// ── Version (read from manifest so it never needs manual updating) ────────────
+const { version } = chrome.runtime.getManifest();
+document.getElementById('header-version').textContent = `v ${version}`;
+document.getElementById('about-version').textContent  = `🔖 ${version}`;
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
